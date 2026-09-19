@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>影片首格色號擷取工具</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            touch-action: manipulation;
+        }
+        /* Custom scrollbar & canvas interaction styling */
+        .canvas-container {
+            position: relative;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+        }
+        /* Pulse animation for notice */
+        @keyframes pulse-light {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        .animate-pulse-light {
+            animation: pulse-light 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col justify-between selection:bg-indigo-500 selection:text-white">
+
+    <!-- Header -->
+    <header class="w-full bg-slate-800/80 backdrop-blur border-b border-slate-700/60 sticky top-0 z-30 px-4 py-3">
+        <div class="max-w-md mx-auto flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-bold shadow-lg shadow-indigo-500/30">
+                    <i class="fa-solid fa-droplet text-sm"></i>
+                </div>
+                <h1 class="font-bold text-lg text-white tracking-wide">影片首格取色器</h1>
+            </div>
+            <span class="text-xs bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full font-medium">限 4 秒內影片</span>
+        </div>
+    </header>
+
+    <!-- Main Content Container -->
+    <main class="w-full max-w-md mx-auto px-4 py-5 flex-1 flex flex-col justify-center">
+
+        <!-- Custom Toast Notification Box (Replaces alert) -->
+        <div id="toast" class="hidden fixed top-16 left-1/2 -translate-x-1/2 z-50 w-11/12 max-w-sm bg-red-500/90 text-white px-4 py-3 rounded-xl shadow-2xl backdrop-blur flex items-center justify-between text-sm transition-all duration-300">
+            <div class="flex items-center gap-2">
+                <i class="fa-solid fa-circle-exclamation text-lg"></i>
+                <span id="toast-msg">訊息提示</span>
+            </div>
+            <button onclick="hideToast()" class="text-white/80 hover:text-white ml-2 p-1">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+
+        <!-- Copy Success Toast -->
+        <div id="copy-toast" class="hidden fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-emerald-600 text-white px-5 py-2.5 rounded-full shadow-lg flex items-center gap-2 text-sm font-medium transition-all duration-300">
+            <i class="fa-solid fa-check-circle"></i>
+            <span>已成功複製色號！</span>
+        </div>
+
+        <!-- Upload Card -->
+        <div id="upload-card" class="bg-slate-800/60 border-2 border-dashed border-slate-600 hover:border-indigo-500 rounded-2xl p-6 text-center transition-all duration-300 cursor-pointer shadow-xl relative group">
+            <input type="file" id="video-input" accept="video/*" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" onchange="handleVideoSelect(event)">
+            
+            <div class="flex flex-col items-center justify-center space-y-3">
+                <div class="w-16 h-16 rounded-full bg-slate-700/80 group-hover:bg-indigo-600/20 group-hover:text-indigo-400 text-slate-300 flex items-center justify-center text-2xl transition-all duration-300">
+                    <i class="fa-solid fa-cloud-arrow-up"></i>
+                </div>
+                <div>
+                    <h3 class="font-semibold text-base text-slate-200">點擊上傳或選擇影片</h3>
+                    <p class="text-xs text-slate-400 mt-1">支援 iOS & Android (系統將自動分析第 1 影格)</p>
+                </div>
+                <div class="inline-flex items-center gap-1.5 text-xs text-amber-400 bg-amber-500/10 px-3 py-1.5 rounded-full border border-amber-500/20">
+                    <i class="fa-solid fa-clock"></i>
+                    <span>影片長度不可超過 4 秒鐘</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading State -->
+        <div id="loading-state" class="hidden bg-slate-800/80 rounded-2xl p-8 text-center shadow-xl my-4">
+            <div class="inline-block animate-spin rounded-full h-10 w-10 border-4 border-indigo-500 border-t-transparent mb-3"></div>
+            <p class="text-slate-300 text-sm font-medium">正在處理影片並擷取首個影格...</p>
+        </div>
+
+        <!-- Hidden Video & Canvas elements for processing -->
+        <video id="video-element" playsinline muted class="hidden"></video>
+        <canvas id="offscreen-canvas" class="hidden"></canvas>
+
+        <!-- Result View (Hidden by default) -->
+        <div id="result-container" class="hidden space-y-4">
+            
+            <!-- Color Info Card -->
+            <div class="bg-slate-800 border border-slate-700/80 rounded-2xl p-4 shadow-xl">
+                <div class="flex items-center justify-between mb-3 border-b border-slate-700/60 pb-3">
+                    <div class="flex items-center gap-2">
+                        <div id="color-badge" class="w-10 h-10 rounded-xl shadow-inner border-2 border-white/20 transition-colors duration-200" style="background-color: #000000;"></div>
+                        <div>
+                            <span id="sampling-mode-label" class="text-xs font-semibold uppercase tracking-wider text-indigo-400 block">左上角 4 像素平均值</span>
+                            <span id="coords-label" class="text-xs text-slate-400">預設採樣區 (0,0 - 1,1)</span>
+                        </div>
+                    </div>
+                    <!-- Single-Click Copy Button -->
+                    <button id="copy-btn" onclick="copyColorCode()" class="bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-semibold px-3 py-2 rounded-xl transition-all flex items-center gap-1.5 shadow-md shadow-indigo-600/30">
+                        <i class="fa-regular fa-copy"></i>
+                        <span>一鍵複製</span>
+                    </button>
+                </div>
+
+                <!-- Code displays -->
+                <div class="grid grid-cols-2 gap-2 text-center">
+                    <div class="bg-slate-900/80 rounded-xl p-2.5 border border-slate-700/40">
+                        <span class="text-[10px] text-slate-400 block font-medium uppercase">HEX 色號</span>
+                        <span id="hex-val" class="font-mono font-bold text-lg text-white">#000000</span>
+                    </div>
+                    <div class="bg-slate-900/80 rounded-xl p-2.5 border border-slate-700/40">
+                        <span class="text-[10px] text-slate-400 block font-medium uppercase">RGB 色號</span>
+                        <span id="rgb-val" class="font-mono font-semibold text-sm text-slate-200 flex justify-center items-center h-7">rgb(0,0,0)</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Instruction Banner -->
+            <div class="bg-slate-800/40 border border-slate-700/50 rounded-xl px-3 py-2 flex items-center justify-between text-xs text-slate-300">
+                <span class="flex items-center gap-1.5">
+                    <i class="fa-solid fa-hand-pointer text-indigo-400"></i>
+                    <span>點擊圖片任意點，可計算該點周圍 9 點平均值</span>
+                </span>
+                <button onclick="resetToDefaultTopLeft()" class="text-indigo-400 hover:text-indigo-300 underline text-[11px] font-medium ml-2 shrink-0">
+                    重置為左上角
+                </button>
+            </div>
+
+            <!-- Canvas Container for interactive color picking -->
+            <div class="bg-slate-800 border border-slate-700/80 rounded-2xl p-2 shadow-xl">
+                <div class="canvas-container w-full overflow-hidden rounded-xl bg-slate-950 flex items-center justify-center min-h-[200px]">
+                    <canvas id="display-canvas" class="max-w-full h-auto cursor-crosshair rounded-lg block"></canvas>
+                </div>
+            </div>
+
+            <!-- Re-upload Button -->
+            <div class="pt-1 text-center">
+                <button onclick="resetUploader()" class="text-xs text-slate-400 hover:text-slate-200 py-2 px-4 rounded-lg transition-colors inline-flex items-center gap-1.5">
+                    <i class="fa-solid fa-arrow-rotate-left"></i>
+                    <span>重新上傳其他影片</span>
+                </button>
+            </div>
+
+        </div>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="w-full py-3 text-center text-xs text-slate-500 border-t border-slate-800">
+        <p>手機網頁優化版 &bull; 專為 Android & iOS 打造</p>
+    </footer>
+
+    <script>
+        // DOM Elements
+        const videoInput = document.getElementById('video-input');
+        const videoElement = document.getElementById('video-element');
+        const offscreenCanvas = document.getElementById('offscreen-canvas');
+        const displayCanvas = document.getElementById('display-canvas');
+        const uploadCard = document.getElementById('upload-card');
+        const loadingState = document.getElementById('loading-state');
+        const resultContainer = document.getElementById('result-container');
+        
+        const colorBadge = document.getElementById('color-badge');
+        const hexVal = document.getElementById('hex-val');
+        const rgbVal = document.getElementById('rgb-val');
+        const samplingModeLabel = document.getElementById('sampling-mode-label');
+        const coordsLabel = document.getElementById('coords-label');
+        const toast = document.getElementById('toast');
+        const toastMsg = document.getElementById('toast-msg');
+        const copyToast = document.getElementById('copy-toast');
+
+        // Global State
+        let currentHex = '#000000';
+        let currentRgb = 'rgb(0,0,0)';
+        let frameImageData = null;
+        let originalImageWidth = 0;
+        let originalImageHeight = 0;
+        let activePoint = null; // {x, y} or null for default top-left
+
+        function showError(message) {
+            toastMsg.textContent = message;
+            toast.classList.remove('hidden');
+            setTimeout(() => {
+                hideToast();
+            }, 4000);
+        }
+
+        function hideToast() {
+            toast.classList.add('hidden');
+        }
+
+        function handleVideoSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            // Check file type
+            if (!file.type.startsWith('video/')) {
+                showError('請上傳有效的影片檔案！');
+                return;
+            }
+
+            // Show loading UI
+            uploadCard.classList.add('hidden');
+            loadingState.classList.remove('hidden');
+            resultContainer.classList.add('hidden');
+
+            const fileURL = URL.createObjectURL(file);
+            videoElement.src = fileURL;
+            videoElement.load();
+
+            // Handle metadata load to check video duration
+            videoElement.onloadedmetadata = function() {
+                const duration = videoElement.duration;
+
+                // Requirement: Duration <= 4 seconds (Adding tiny 0.1s threshold for rounding precision)
+                if (duration > 4.1) {
+                    loadingState.classList.add('hidden');
+                    uploadCard.classList.remove('hidden');
+                    showError(`影片長度為 ${duration.toFixed(1)} 秒，超過 4 秒限制！請上傳 4 秒內的影片。`);
+                    videoInput.value = ''; // reset file input
+                    URL.revokeObjectURL(fileURL);
+                    return;
+                }
+
+                // Seek to frame 0
+                videoElement.currentTime = 0;
+            };
+
+            // Process first frame once seek completes
+            videoElement.onseeked = function() {
+                extractFirstFrame();
+                URL.revokeObjectURL(fileURL); // clean up memory
+            };
+
+            videoElement.onerror = function() {
+                loadingState.classList.add('hidden');
+                uploadCard.classList.remove('hidden');
+                showError('無法讀取該影片格式，請更換其他影片試試。');
+            };
+        }
+
+        function extractFirstFrame() {
+            const width = videoElement.videoWidth;
+            const height = videoElement.videoHeight;
+
+            if (width === 0 || height === 0) {
+                loadingState.classList.add('hidden');
+                uploadCard.classList.remove('hidden');
+                showError('影片尺寸無效或無法順利解析影格。');
+                return;
+            }
+
+            originalImageWidth = width;
+            originalImageHeight = height;
+
+            // Prepare canvas size matching original video resolution
+            offscreenCanvas.width = width;
+            offscreenCanvas.height = height;
+            const offContext = offscreenCanvas.getContext('2d');
+            
+            // Draw 1st frame
+            offContext.drawImage(videoElement, 0, 0, width, height);
+            
+            // Cache frame image data
+            frameImageData = offContext.getImageData(0, 0, width, height);
+
+            // Display on screen canvas
+            displayCanvas.width = width;
+            displayCanvas.height = height;
+
+            // Initial mode: Calculate top-left 4 pixels
+            calculateTopLeftColor();
+
+            // Hide loading, show results
+            loadingState.classList.add('hidden');
+            resultContainer.classList.remove('hidden');
+        }
+
+        function calculateTopLeftColor() {
+            activePoint = null;
+            const ctx = offscreenCanvas.getContext('2d');
+            
+            // Sample top-left 2x2 grid (0,0), (1,0), (0,1), (1,1)
+            const sampleW = Math.min(2, originalImageWidth);
+            const sampleH = Math.min(2, originalImageHeight);
+            
+            const imgData = ctx.getImageData(0, 0, sampleW, sampleH);
+            const data = imgData.data;
+
+            let totalR = 0, totalG = 0, totalB = 0;
+            let count = 0;
+
+            for (let i = 0; i < data.length; i += 4) {
+                totalR += data[i];
+                totalG += data[i + 1];
+                totalB += data[i + 2];
+                count++;
+            }
+
+            const avgR = Math.round(totalR / count);
+            const avgG = Math.round(totalG / count);
+            const avgB = Math.round(totalB / count);
+
+            updateColorDisplay(avgR, avgG, avgB);
+            
+            samplingModeLabel.textContent = '左上角 4 像素平均值';
+            coordsLabel.textContent = `預設採樣區 (0,0 - ${sampleW - 1},${sampleH - 1})`;
+
+            // Draw image on canvas and overlay marker box
+            renderCanvasWithMarker(null);
+        }
+
+        function calculateNeighborhoodColor(targetX, targetY) {
+            activePoint = { x: targetX, y: targetY };
+            const ctx = offscreenCanvas.getContext('2d');
+
+            // Define 3x3 boundary around target point
+            const minX = Math.max(0, targetX - 1);
+            const maxX = Math.min(originalImageWidth - 1, targetX + 1);
+            const minY = Math.max(0, targetY - 1);
+            const maxY = Math.min(originalImageHeight - 1, targetY + 1);
+
+            let totalR = 0, totalG = 0, totalB = 0;
+            let count = 0;
+
+            // Iterate through pixels in 3x3 matrix
+            for (let y = minY; y <= maxY; y++) {
+                for (let x = minX; x <= maxX; x++) {
+                    const pixelData = ctx.getImageData(x, y, 1, 1).data;
+                    totalR += pixelData[0];
+                    totalG += pixelData[1];
+                    totalB += pixelData[2];
+                    count++;
+                }
+            }
+
+            const avgR = Math.round(totalR / count);
+            const avgG = Math.round(totalG / count);
+            const avgB = Math.round(totalB / count);
+
+            updateColorDisplay(avgR, avgG, avgB);
+
+            samplingModeLabel.textContent = `自訂選擇點 (${count} 像素平均)`;
+            coordsLabel.textContent = `座標: (${targetX}, ${targetY}) 及其周圍 8 點`;
+
+            // Draw image on display canvas and draw cursor crosshair/marker
+            renderCanvasWithMarker({ x: targetX, y: targetY, minX, maxX, minY, maxY });
+        }
+
+        function renderCanvasWithMarker(selection) {
+            const ctx = displayCanvas.getContext('2d');
+            
+            // Redraw base image from offscreen canvas
+            ctx.drawImage(offscreenCanvas, 0, 0);
+
+            if (!selection) {
+                // Highlight Top-Left 4 pixels
+                ctx.strokeStyle = '#3b82f6'; // Bright blue
+                ctx.lineWidth = Math.max(2, Math.floor(displayCanvas.width / 150));
+                ctx.strokeRect(0, 0, Math.min(20, displayCanvas.width * 0.1), Math.min(20, displayCanvas.height * 0.1));
+                return;
+            }
+
+            const { x, y, minX, maxX, minY, maxY } = selection;
+
+            // Scale marker dimensions proportionally to image resolution
+            const strokeWidth = Math.max(2, Math.floor(displayCanvas.width / 200));
+            const ringRadius = Math.max(12, Math.floor(displayCanvas.width / 40));
+
+            // Draw 3x3 region boundary box
+            ctx.strokeStyle = '#6366f1';
+            ctx.lineWidth = strokeWidth;
+            const regionW = (maxX - minX + 1);
+            const regionH = (maxY - minY + 1);
+            ctx.strokeRect(minX, minY, regionW, regionH);
+
+            // Draw outer target ring
+            ctx.beginPath();
+            ctx.arc(x, y, ringRadius, 0, Math.PI * 2);
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = strokeWidth + 1;
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(x, y, ringRadius, 0, Math.PI * 2);
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = strokeWidth;
+            ctx.stroke();
+
+            // Center target dot
+            ctx.beginPath();
+            ctx.arc(x, y, Math.max(2, strokeWidth), 0, Math.PI * 2);
+            ctx.fillStyle = '#ef4444'; // Red center point
+            ctx.fill();
+        }
+
+        function handleCanvasClick(event) {
+            if (!frameImageData) return;
+
+            const rect = displayCanvas.getBoundingClientRect();
+            const clientX = event.clientX || (event.touches && event.touches[0].clientX);
+            const clientY = event.clientY || (event.touches && event.touches[0].clientY);
+
+            if (clientX === undefined || clientY === undefined) return;
+
+            // Calculate tap coordinates relative to native image pixels
+            const scaleX = displayCanvas.width / rect.width;
+            const scaleY = displayCanvas.height / rect.height;
+
+            const x = Math.floor((clientX - rect.left) * scaleX);
+            const y = Math.floor((clientY - rect.top) * scaleY);
+
+            // Ensure coordinates stay within image bounds
+            const clampedX = Math.max(0, Math.min(originalImageWidth - 1, x));
+            const clampedY = Math.max(0, Math.min(originalImageHeight - 1, y));
+
+            calculateNeighborhoodColor(clampedX, clampedY);
+        }
+
+        // Attach touch and click listeners to canvas
+        displayCanvas.addEventListener('click', handleCanvasClick);
+        displayCanvas.addEventListener('touchstart', function(e) {
+            e.preventDefault(); // prevent scrolling while tapping canvas
+            handleCanvasClick(e);
+        }, { passive: false });
+
+        function updateColorDisplay(r, g, b) {
+            currentHex = rgbToHex(r, g, b);
+            currentRgb = `rgb(${r}, ${g}, ${b})`;
+
+            colorBadge.style.backgroundColor = currentHex;
+            hexVal.textContent = currentHex;
+            rgbVal.textContent = currentRgb;
+        }
+
+        function rgbToHex(r, g, b) {
+            const toHex = (c) => c.toString(16).padStart(2, '0').toUpperCase();
+            return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+        }
+
+        function resetToDefaultTopLeft() {
+            if (frameImageData) {
+                calculateTopLeftColor();
+            }
+        }
+
+        function copyColorCode() {
+            // Standard execCommand fallback for seamless mobile iframe compatibility
+            const textArea = document.createElement("textarea");
+            textArea.value = currentHex;
+            textArea.style.position = "fixed";
+            textArea.style.left = "-9999px";
+            textArea.style.top = "-9999px";
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+
+            try {
+                const successful = document.execCommand('copy');
+                if (successful) {
+                    showCopyToast();
+                } else {
+                    showError('複製失敗，請手動複製色號。');
+                }
+            } catch (err) {
+                showError('剪貼簿存取失敗：' + err);
+            }
+
+            document.body.removeChild(textArea);
+        }
+
+        function showCopyToast() {
+            copyToast.classList.remove('hidden');
+            setTimeout(() => {
+                copyToast.classList.add('hidden');
+            }, 2000);
+        }
+
+        function resetUploader() {
+            videoInput.value = '';
+            resultContainer.classList.add('hidden');
+            uploadCard.classList.remove('hidden');
+            activePoint = null;
+            frameImageData = null;
+        }
+    </script>
+</body>
+</html>
